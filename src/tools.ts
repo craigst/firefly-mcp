@@ -68,7 +68,7 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       },
     },
     async ({ active_only, types }) => {
-      const all = await client.accounts();
+      const all = await client.realAccounts();
       const rows = all
         .filter((a) => (active_only === false ? true : a.attributes.active))
         .filter((a) => (types?.length ? types.includes(a.attributes.type) : true))
@@ -101,7 +101,7 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       let acctId = id;
       if (!acctId) {
         if (!name) throw new Error('give either id or name');
-        const found = (await client.accounts()).find(
+        const found = (await client.realAccounts()).find(
           (a) => a.attributes.name.toLowerCase() === name.toLowerCase(),
         );
         if (!found) throw new Error(`no account named "${name}"`);
@@ -130,7 +130,7 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       inputSchema: {},
     },
     async () => {
-      const all = await client.accounts();
+      const all = await client.realAccounts();
       const counted = all.filter((a) => a.attributes.active && a.attributes.include_net_worth);
       const assets = counted.filter((a) => a.attributes.type === 'asset');
       const debts = counted.filter((a) =>

@@ -92,9 +92,31 @@ export class FireflyClient {
     return j.data;
   }
 
-  async accounts(): Promise<Account[]> {
-    const j = await this.get<{ data: Account[] }>('/api/v1/accounts?limit=200');
+  async accounts(type?: string): Promise<Account[]> {
+    const q = new URLSearchParams();
+    if (type) q.set('type', type);
+    q.set('limit', '200');
+    const j = await this.get<{ data: Account[] }>(`/api/v1/accounts?${q}`);
     return j.data;
+  }
+
+  /**
+   * The accounts a person actually holds.
+   *
+   * A bare /accounts returns the first 200 rows and Firefly auto-creates an
+   * expense account per merchant, so the real asset/liability accounts are
+   * buried past page one. Ask for the types explicitly instead.
+   */
+  async realAccounts(): Promise<Account[]> {
+    const out: Account[] = [];
+    for (const t of ['asset', 'liabilities', 'cash']) {
+      try {
+        out.push(...(await this.accounts(t)));
+      } catch {
+        /* a type with no rows is not an error */
+      }
+    }
+    return out;
   }
 
   async account(id: string): Promise<Account> {
