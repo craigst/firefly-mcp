@@ -60,9 +60,9 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
     {
       title: 'List accounts and balances',
       description:
-        'Every real account with its current balance — THIS is the tool for "how much money do I have". '
-        'Each row carries an `owner`: "Craig" for the household accounts and "Dad" for his own '
-        'account, which is tracked separately and excluded from net worth. Always name it as Dad\'s '
+        'Every real account with its current balance — THIS is the tool for "how much money do I have". ' +
+        'Each row carries an `owner`: "Craig" for the household accounts and "Dad" for his own ' +
+        'account, which is tracked separately and excluded from net worth. Always name it as Dad\'s ' +
         'when you report it.',
       inputSchema: {
         active_only: z.boolean().optional().describe('Only active accounts (default true)'),
@@ -137,7 +137,7 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       title: 'Net worth',
       description:
         'Assets minus liabilities, counting only accounts flagged for net worth. ' +
-        'Firefly\'s own "net worth" figure reports assets only, so this subtracts debts. '
+        'Firefly\'s own "net worth" figure reports assets only, so this subtracts debts. ' +
         'Dad\'s account is excluded on purpose - it is tracked but is not Craig\'s money.',
       inputSchema: {},
     },
