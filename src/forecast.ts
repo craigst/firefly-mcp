@@ -48,6 +48,72 @@ export function nextDue(bill: Bill, today: Date): Date {
   return d;
 }
 
+// --- payroll model, derived from 19 payslips (see README) -----------------
+// shift £190 taxable; night £30 is an ALLOWANCE - not taxed, no NI, no pension.
+export const SHIFT_RATE = 190.0;
+export const NIGHT_RATE = 30.0;
+const TAX_ALLOWANCE_WEEKLY = 241.73;   // 1257L
+const NI_THRESHOLD_WEEKLY = 242.0;
+const PENSION_FLOOR = 30.0;
+const TAX_RATE = 0.2;
+const NI_RATE = 0.08;
+const PENSION_RATE = 0.04;
+
+export interface PayWeek {
+  shifts: number;
+  nights: number;
+  basic: number;
+  night_pay: number;
+  gross: number;
+  tax: number;
+  ni: number;
+  pension: number;
+  net: number;
+  on_leave: boolean;
+}
+
+export interface RotaConfig {
+  anchor: Date;       // first day of a 4-day run, phase-calibrated
+  cycleDays: number;  // 8
+  onDays: number;     // 4
+  leaveShiftsCap: number;
+}
+
+export function onShift(d: Date, rota: RotaConfig): boolean {
+  const days = Math.round((d.getTime() - rota.anchor.getTime()) / DAY);
+  const m = ((days % rota.cycleDays) + rota.cycleDays) % rota.cycleDays;
+  return m < rota.onDays;
+}
+
+export function shiftsBetween(start: Date, end: Date, rota: RotaConfig): number {
+  let n = 0;
+  for (let d = start; d <= end; d = addDays(d, 1)) if (onShift(d, rota)) n += 1;
+  return n;
+}
+
+export function payForWeek(payday: Date, onLeave: boolean, rota: RotaConfig): PayWeek {
+  let shifts = shiftsBetween(addDays(payday, -6), payday, rota);
+  let nights: number;
+  if (onLeave) {
+    shifts = Math.min(shifts, rota.leaveShiftsCap);
+    nights = 0;                       // no night-out money on annual leave
+  } else {
+    nights = Math.max(0, shifts - 1);
+  }
+  const basic = SHIFT_RATE * shifts;
+  const tax = TAX_RATE * Math.max(0, basic - TAX_ALLOWANCE_WEEKLY);
+  const ni = NI_RATE * Math.max(0, basic - NI_THRESHOLD_WEEKLY);
+  const pension = PENSION_RATE * Math.max(0, basic - PENSION_FLOOR);
+  const nightPay = NIGHT_RATE * nights;
+  return {
+    shifts, nights,
+    basic: round2(basic), night_pay: round2(nightPay), gross: round2(basic + nightPay),
+    tax: round2(tax), ni: round2(ni), pension: round2(pension),
+    net: round2(basic - tax - ni - pension + nightPay),
+    on_leave: onLeave,
+  };
+}
+
 export interface LeaveSpan { start: string; end: string; }
 
 export interface ForecastOptions {
@@ -57,6 +123,9 @@ export interface ForecastOptions {
   buffer?: number;
   leaveSpans?: LeaveSpan[];
   currency?: string;
+  rotaAnchor?: string;   // YYYY-MM-DD, phase-calibrated first shift day
+  rotaCycleDays?: number;
+  rotaOnDays?: number;
 }
 
 export interface DueItem { name: string; amount: number; due: string; }
@@ -70,6 +139,14 @@ export interface ForecastResult {
   buffer: number;
   safe_to_spend: number;
   predicted_wage: number;
+  predicted_gross: number;
+  predicted_shifts: number;
+  predicted_nights: number;
+  predicted_tax: number;
+  predicted_ni: number;
+  predicted_pension: number;
+  shift_rate: number;
+  night_rate: number;
   normal_wage: number;
   leave_wage: number;
   on_leave: boolean;
@@ -80,10 +157,21 @@ export interface ForecastResult {
   lowest_balance: number;
   lowest_date: string;
   shortfall: boolean;
-  weeks: { payday: string; balance: number }[];
+  weeks: { payday: string; balance: number; shifts: number; nights: number; gross: number; net: number; on_leave: boolean }[];
   due_before_payday: DueItem[];
   coming_after: DueItem[];
   assumptions: string[];
+}
+
+/** Best realistic week in the horizon (most shifts), for the upside figure. */
+function weeklyHigh(rota: RotaConfig, payday: Date): number {
+  let best = 0;
+  for (let i = 0; i < 8; i++) {
+    const d = addDays(payday, i * 7);
+    const pw = payForWeek(d, false, rota);
+    if (pw.net > best) best = pw.net;
+  }
+  return best;
 }
 
 const mean = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -137,42 +225,28 @@ export async function buildForecast(
   }
   upcoming.sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  // --- wages: sort by DATE, never trust the endpoint's ordering --------------
-  const wageTxns = await client.transactions({
-    accountId: opts.currentAccountId,
-    start: iso(addDays(today, -400)),
-    end: iso(today),
-    limit: 500,
-  });
-  const wagePairs: { date: string; amount: number }[] = [];
-  for (const g of wageTxns) {
-    for (const t of g.attributes.transactions ?? []) {
-      if (t.type !== 'deposit') continue;
-      if (!(t.description ?? '').toUpperCase().includes('WAGES')) continue;
-      wagePairs.push({ date: (t.date ?? '').slice(0, 10), amount: Math.abs(Number(t.amount)) });
-    }
-  }
-  wagePairs.sort((a, b) => a.date.localeCompare(b.date));
-  const wages = wagePairs.map((w) => w.amount);
-  const recentWages = wages.slice(-13);
-  const sorted = [...wages].sort((a, b) => a - b);
-  const normalWage = mean(recentWages);
-  const wageHigh = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
-  const wageLow = sorted.length ? sorted[0] : 0;
-  const leaveWage = Math.min(wageLow, 490);
+  // --- rota + payroll model ------------------------------------------------
+  // Live wages are no longer averaged: the 4-on/4-off rota tells us the shifts in
+  // each pay week, and the payslip rates turn that into an exact gross and net.
+  const rota: RotaConfig = {
+    anchor: atUtc(opts.rotaAnchor ?? '2026-03-17'),
+    cycleDays: opts.rotaCycleDays ?? 8,
+    onDays: opts.rotaOnDays ?? 4,
+    leaveShiftsCap: 3,
+  };
 
   const overlapsLeave = (wkEnd: Date): boolean => {
     const wkStart = addDays(wkEnd, -6);
     return leaveSpans.some((sp) => {
-      const s = atUtc(sp.start);
-      const e = atUtc(sp.end);
-      return s <= wkEnd && e >= wkStart;
+      const s0 = atUtc(sp.start);
+      const e0 = atUtc(sp.end);
+      return s0 <= wkEnd && e0 >= wkStart;
     });
   };
-  const weekWage = (paydayDate: Date): number =>
-    overlapsLeave(paydayDate) ? leaveWage : normalWage;
 
   const onLeave = overlapsLeave(payday);
+  const payThisWeek = payForWeek(payday, onLeave, rota);
+  const weekPay = (d: Date): PayWeek => payForWeek(d, overlapsLeave(d), rota);
 
   // --- discretionary: mean of COMPLETE calendar weeks ----------------------
   const discTxns = await client.transactions({
@@ -213,7 +287,7 @@ export async function buildForecast(
   let nextFri = payday;
   for (let d = today; d <= horizonEnd; d = addDays(d, 1)) {
     if (d.getTime() === nextFri.getTime()) {
-      bal += weekWage(nextFri);
+      bal += weekPay(nextFri).net;
       nextFri = addDays(nextFri, 7);
     }
     bal -= dueByDay.get(iso(d)) ?? 0;
@@ -222,10 +296,18 @@ export async function buildForecast(
     curve.set(iso(d), bal);
   }
 
-  const weeks: { payday: string; balance: number }[] = [];
+  const weeks: {
+    payday: string; balance: number; shifts: number; nights: number;
+    gross: number; net: number; on_leave: boolean;
+  }[] = [];
   for (let fri = payday; fri <= horizonEnd; fri = addDays(fri, 7)) {
     const b = curve.get(iso(fri));
-    if (b !== undefined) weeks.push({ payday: iso(fri), balance: round2(b) });
+    if (b === undefined) continue;
+    const pw = weekPay(fri);
+    weeks.push({
+      payday: iso(fri), balance: round2(b), shifts: pw.shifts, nights: pw.nights,
+      gross: pw.gross, net: pw.net, on_leave: pw.on_leave,
+    });
   }
 
   const dueNow = upcoming.filter((u) => u.date <= payday);
@@ -234,11 +316,11 @@ export async function buildForecast(
   const afterPayday = addDays(payday, 14);
 
   const assumptions = [
-    `income assumed ${round2(normalWage)} per weekly payday (mean of last ${recentWages.length} WAGES deposits)`,
+    `income modelled from the rota: ${SHIFT_RATE}/shift + ${NIGHT_RATE}/night, ${payThisWeek.shifts} shifts and ${payThisWeek.nights} nights this week`,
     `discretionary assumed ${round2(weeklySpend)} per week (mean of ${complete.length} complete weeks, bills excluded)`,
     `bills limited to those paid from account "${acc.attributes.name}"`,
   ];
-  if (onLeave) assumptions.push(`payday week overlaps annual leave: planned at ${round2(leaveWage)} (no night-out money)`);
+  if (onLeave) assumptions.push('payday week overlaps annual leave: holiday pay at basic only, no night-out money');
 
   return {
     today: iso(today),
@@ -248,11 +330,19 @@ export async function buildForecast(
     committed: round2(committed),
     buffer,
     safe_to_spend: round2(safe),
-    predicted_wage: round2(weekWage(payday)),
-    normal_wage: round2(normalWage),
-    leave_wage: round2(leaveWage),
+    predicted_wage: payThisWeek.net,
+    predicted_gross: payThisWeek.gross,
+    predicted_shifts: payThisWeek.shifts,
+    predicted_nights: payThisWeek.nights,
+    predicted_tax: payThisWeek.tax,
+    predicted_ni: payThisWeek.ni,
+    predicted_pension: payThisWeek.pension,
+    shift_rate: SHIFT_RATE,
+    night_rate: NIGHT_RATE,
+    normal_wage: payThisWeek.net,
+    leave_wage: round2(payForWeek(payday, true, rota).net),
     on_leave: onLeave,
-    predicted_wage_high: round2(wageHigh),
+    predicted_wage_high: round2(weeklyHigh(rota, payday)),
     predicted_weekly_spend: round2(weeklySpend),
     weeks_measured: complete.length,
     projected_at_payday: weeks.length ? weeks[0].balance : round2(balance),

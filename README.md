@@ -66,3 +66,29 @@ npm run setup                 # install + build
 node dist/index.js --check    # validate config, no transport
 node dist/index.js            # stdio (gateway / harness)
 ```
+
+## Pay model (derived from 19 payslips)
+
+| Component | Rate | Taxable? |
+|---|---|---|
+| Shift | £190.00 | yes |
+| Night out | £30.00 | **no** — allowance, no NI, no pension |
+
+```
+basic   = 190 x shifts
+PAYE    = 20%   x max(0, basic - 241.73)   # 1257L weekly
+NI      = 8%    x max(0, basic - 242.00)   # employee threshold
+pension = 4%    x max(0, basic - 30.00)    # Ee Pension
+net     = basic - PAYE - NI - pension + 30 x nights
+```
+
+Verified against the slips: 4 shifts + 3 nights → £675.71 modelled vs £675.76 actual.
+Tax and NI are charged on **basic only** — the night-out money is untaxed, which is
+why a flat weekly average never predicted a week correctly.
+
+**Rota**: 4 on / 4 off on an 8-day cycle. The calendar's event starts 2026-03-14,
+but calibrated against 13 weeks of bank credits the pay-week phase sits 3 days
+later, so the anchor is **2026-03-17**: 8 of 13 weeks then match within £2, and the
+rest are one extra/fewer night or a fifth (overtime) shift.
+
+**Annual leave**: no night-out money at all, and holiday pay behaves like basic only.
