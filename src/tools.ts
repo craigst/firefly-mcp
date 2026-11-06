@@ -46,7 +46,7 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
     'firefly_health',
     {
       title: 'Firefly connection health',
-      description: 'Check the Firefly III instance is reachable and which version it runs.',
+      description: 'Connection check ONLY. Returns no account data, no balances and no transactions. If you want the money, call accounts_list / net_worth / transactions_search instead.',
       inputSchema: {},
     },
     async () => {
@@ -60,7 +60,10 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
     {
       title: 'List accounts and balances',
       description:
-        'Every Firefly account with its current balance. Use this for "how much money do I have".',
+        'Every real account with its current balance — THIS is the tool for "how much money do I have". '
+        'Each row carries an `owner`: "Craig" for the household accounts and "Dad" for his own '
+        'account, which is tracked separately and excluded from net worth. Always name it as Dad\'s '
+        'when you report it.',
       inputSchema: {
         active_only: z.boolean().optional().describe('Only active accounts (default true)'),
         types: z.array(z.string()).optional()
@@ -72,16 +75,24 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       const rows = all
         .filter((a) => (active_only === false ? true : a.attributes.active))
         .filter((a) => (types?.length ? types.includes(a.attributes.type) : true))
-        .map((a) => ({
-          id: a.id,
-          name: a.attributes.name,
-          type: a.attributes.type,
-          role: a.attributes.account_role ?? null,
-          balance: Number(a.attributes.current_balance),
-          currency: a.attributes.currency_code,
-          in_net_worth: a.attributes.include_net_worth,
-          active: a.attributes.active,
-        }))
+        .map((a) => {
+          const nm = a.attributes.name;
+          const isDad = /^dad\b/i.test(nm);
+          return {
+            id: a.id,
+            name: nm,
+            owner: isDad ? 'Dad' : 'Craig',
+            note: isDad
+              ? "Dad's own account - tracked separately, NOT part of Craig's net worth, not his money"
+              : null,
+            type: a.attributes.type,
+            role: a.attributes.account_role ?? null,
+            balance: Number(a.attributes.current_balance),
+            currency: a.attributes.currency_code,
+            in_net_worth: a.attributes.include_net_worth,
+            active: a.attributes.active,
+          };
+        })
         .sort((a, b) => b.balance - a.balance);
       return json({ count: rows.length, accounts: rows });
     },
@@ -126,7 +137,8 @@ export function registerTools(server: McpServer, client: FireflyClient, opts: Se
       title: 'Net worth',
       description:
         'Assets minus liabilities, counting only accounts flagged for net worth. ' +
-        'Firefly\'s own "net worth" figure reports assets only, so this subtracts debts.',
+        'Firefly\'s own "net worth" figure reports assets only, so this subtracts debts. '
+        'Dad\'s account is excluded on purpose - it is tracked but is not Craig\'s money.',
       inputSchema: {},
     },
     async () => {
