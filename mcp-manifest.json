@@ -1,0 +1,11 @@
+{
+  "name": "firefly",
+  "version": "1.0.0",
+  "runtime": "node22",
+  "build_command": "npm run setup",
+  "start_command": "node dist/index.js",
+  "capabilities": {
+    "high_privilege_tools": [],
+    "delegation_supported": false
+  }
+}

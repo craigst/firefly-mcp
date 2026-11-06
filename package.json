@@ -1,0 +1,27 @@
+{
+  "name": "firefly-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Firefly III personal finance: accounts, balances, transactions, spending analysis, bills, budgets and a cash-flow forecast (safe-to-spend and affordability).",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "firefly-mcp": "dist/index.js" },
+  "main": "dist/index.js",
+  "files": ["dist", "README.md", "mcp-manifest.json"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "setup": "npm install --include=dev && npm run build",
+    "check": "node dist/index.js --check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
